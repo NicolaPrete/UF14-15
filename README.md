@@ -1,128 +1,116 @@
-# HIS AFP Management System
+# Relazione Tecnica — Task 1: Isolamento Infrastrutturale e Protezione del Dato Sanitario
 
-Un sistema completo per la gestione del triage e dell'accesso al pronto soccorso. Questo progetto verrà usato come base
-per il l'Unità Formativa 15 (Sviluppo Frontend) e Unità Formativa 14 (Architettura Applicativa) del corso di Alta
-Formazione Professionale dell'istituto G.Marconi di Rovereto.
+Progetto: HIS-AFP · Repository: `pietro2356/his-afp`
 
-# Panoramica del Progetto
+## 1. Situazione di partenza
 
-Il sistema simula il flusso di lavoro di un Pronto Soccorso, consentendo la gestione dei pazienti dall'ammissione alla
-dimissione.
-Il progetto è suddiviso in due aree di competenza tecnica:
+Il `docker-compose.yml` originale definisce una singola rete "di default" (quella
+creata implicitamente da Compose). Tutti i servizi — `db`, `backend`, `fe-prod`,
+`fe-test`, `fe-sio`, `gateway` — condividono lo stesso spazio L2/L3 e possono
+risolversi a vicenda via DNS interno.
 
-* **UF15 (Sviluppo Frontend):** Sviluppo di una SPA responsive con **Angular**.
-* **UF14 (Architettura Applicativa):** Containerizzazione, orchestrazione e configurazione di rete con **Docker** e *
-  *NGINX**.
+Due criticità concrete:
 
-# Cosa troverete già pronto nel progetto
+- **`db` esponeva la porta 5432 sull'host** (`5432:5432`), quindi era raggiungibile
+  anche da fuori Docker, non solo dagli altri container.
+- **Rete piatta**: un frontend compromesso (es. `fe-prod`) poteva risolvere il nome
+  `db` o `sio-postgres` e tentare una connessione diretta al database, saltando
+  completamente backend e gateway.
 
-* **Backend:** Server applicativo con **Node.js** ed **Express** per gestire le API e la logica di business.
-* **Database:** Database relazionale PostgreSQL per la memorizzazione dei dati dei pazienti e delle operazioni di
-  triage.
+## 2. Modifiche applicate
 
-# Cosa dovrete sviluppare
+Ho modificato `docker-compose.yml`:
 
-* **Frontend (UF15):** Sviluppo di una Single Page Application (SPA) con **Angular** per l'interfaccia utente.
-* **Containerizzazione (UF14):**
-    * Creazione di Dockerfile, configurazione di Docker Compose e NGINX per il deploy dell'applicazione.
-    * Impostazione del monitoraggio e logging dei container.
-    * Test e documentazione del sistema.
+1. **Due reti bridge dedicate**, dichiarate esplicitamente:
+   - `frontend-net`: contiene `fe-prod`, `fe-test`, `fe-sio` e il `gateway`.
+   - `backend-net`: contiene `db`, `backend` e il `gateway`.
+2. **Il `gateway` è l'unico servizio su entrambe le reti** → è l'unico "ponte" possibile
+   tra le due zone, coerente col vincolo di sicurezza richiesto.
+3. **Rimossa la pubblicazione della porta 5432** del database verso l'host: nessuna
+   sezione `ports` sul servizio `db`. Resta risolvibile via DNS solo all'interno di
+   `backend-net`.
+4. **Hardening aggiuntivo**: `backend-net` è marcata `internal: true`. Questo impedisce
+   a qualunque container su quella rete (compreso un eventuale `backend` compromesso)
+   di raggiungere Internet o reti esterne — utile perché `backend` e `db` non hanno
+   alcun bisogno di uscire in rete pubblica (ho verificato che le uniche chiamate HTTP
+   in `backend/` sono verso l'endpoint Prometheus/metrics locale, nessuna dipendenza
+   esterna a runtime).
+5. **`gateway` dipende esplicitamente anche da `backend`** (`depends_on`), non solo
+   dai frontend, dato che ora media anche le chiamate `/api/`.
 
-# Struttura del Progetto
+Il resto della configurazione (porte del gateway 80/8080/8999, routing nginx per
+PROD/TEST/SVI, variabili d'ambiente) resta invariato.
 
-Di seguito la struttura logica del repository e il ruolo delle cartelle principali.
-
-- `backend/`: Server applicativo JavaScript. Espone le API per triage, gestione pazienti e accesso al DB.
-- `db/`: Script SQL per schema e dati di esempio `init.sql`.
-- `docs/`: Documentazione aggiuntiva, diagrammi e note architetturali.
-
-```
-his-afp
-├── backend
-│   ├── api_request
-│   │   ├── Auth.http
-│   │   ├── CodiciColori.http
-│   │   ├── getAdmissions.http
-│   │   └── HealthCheck.http
-│   ├── Dockerfile
-│   ├── package.json
-│   ├── package-lock.json
-│   └── server.js
-├── db
-│   └── init.sql
-├── docker-compose.yml
-├── docs
-│   ├── API.md
-│   └── DATABASE.md
-├── LICENSE
-└── README.md
-```
-
-# Requisiti
-
-- Docker e Docker Compose
-- Node.js e npm (per sviluppo locale)
-- Programma per accesso al DB PostgreSQL (es. pgAdmin, DBeaver)
-- Programma per testare API REST (es. Postman, Insomnia)
-
-# Utilizzo del repository
-
-1. **Eseguire in fork del progetto su GitHub**
-2. Clonare il repository: `git clone <url-del-repo>`
-3. Spostarsi nella cartella del progetto: `cd his-afp`
-4. Creare un nuovo branch per le modifiche: `git checkout -b uf15-2026/nome-cognome`
-5. Avviare i container Docker: `docker-compose up -d --build`
-6. Accedere al backend API su `http://localhost:3000`
-
-# Avvio dei servizi
-
-Per avviare i servizi, eseguire il comando:
+## 3. Come validare (comandi da eseguire dopo `docker compose up -d --build`)
 
 ```bash
-docker-compose up -d --build
+# 1. Il DB non deve avere porte pubblicate sull'host
+docker port sio-postgres
+# -> nessun output = 5432 NON è raggiungibile da fuori Docker
+
+# 2. Da fe-prod il nome "db" / "sio-postgres" NON deve risolvere
+docker exec sio-fe-prod getent hosts db
+docker exec sio-fe-prod getent hosts sio-postgres
+# -> entrambi devono fallire (exit code != 0, nessun IP restituito)
+
+docker exec sio-fe-prod ping -c1 -W1 db
+# -> "bad address 'db'" o "Name or service not known"
+
+# 3. Controprova positiva: dal backend il DB DEVE risolvere (stessa rete)
+docker exec sio-backend getent hosts db
+# -> restituisce l'IP del container db
+
+# 4. Verifica che il gateway sia l'unico container con porte pubblicate
+docker compose ps
+# -> solo "sio-gateway" mostra colonna PORTS non vuota (80, 8080, 8999)
+
+# 5. I test funzionali/Postman vanno ora puntati al Gateway, non ai container:
+#    baseURL = http://localhost/api        (ambiente PROD)
+#    baseURL = http://localhost:8080/api   (ambiente TEST)
+#    baseURL = http://localhost:8999/api   (ambiente SVI)
 ```
 
-Questo comando costruisce e avvia i container definiti nel file `docker-compose.yml`.
+`fe-prod` non ha nemmeno un client Postgres installato nell'immagine nginx:alpine,
+quindi il fallimento è garantito sia a livello applicativo (nessun tool) sia — punto
+verificato sopra — a livello di rete/DNS, che è il livello richiesto dal vincolo di
+sicurezza ("il Database deve risultare inesistente").
 
-Per fermare i servizi, eseguire:
+## 4. Osservazioni critiche sull'architettura attuale
 
-```bash
-docker-compose down -v
-```
+Segnalo alcuni limiti che, a mio avviso, andrebbero affrontati in un'evoluzione del
+progetto, oltre al perimetro stretto di questo task:
 
-L'opzione `-v` rimuove anche i volumi associati, in modo da avere un ambiente pulito al successivo avvio.
-
-Per ricompilare un singolo servizio (es. backend), eseguire:
-
-```bash
-docker-compose up -d --build --no-deps backend
-```
-
-# Accessi
-
-- **Backend API:** `http://localhost:3000`
-- **Database PostgreSQL:** `localhost:5432` (user: `sio_user`, password: `sio_password`, database: `sio_db`)
-
-# Test delle API
-
-Per testare le API sono disponibili le collection Postman nella cartella `postman/collection`.
-
-> Le collection sono suddivise in base ai capitoli della documentazione relativa alle API, presente nel file
-`docs/API.md`.
-
-# Documentazione
-
-Allinterno della cartella `docs/` sono presenti documenti dettagliati riguardanti:
-
-- Documentazione delle API: [docs/API.md](docs/API.md)
-- Struttura del Database: [docs/DATABASE.md](docs/DATABASE.md)
-
-# Contribuire
-
-- Aprire issue per bug o feature
-- Creare branch per la feature: `git checkout -b feat/nome-feature`
-- Inviare pull request con descrizione e test
-
-# Licenza
-
-Questo progetto è concesso in licenza sotto la Licenza MIT - vedere il file [LICENSE](LICENSE) per i dettagli.
+- **Segreti in chiaro nel compose file.** `POSTGRES_PASSWORD` e `JWT_SECRET` sono
+  hard-coded nel `docker-compose.yml` e finiscono quindi in Git. Per un sistema che
+  tratta dati sanitari questo è un problema serio a prescindere dalla rete: andrebbero
+  spostati in un `.env` escluso da Git (o meglio in un secret manager: Docker Secrets,
+  Vault, AWS/Azure Key Vault) prima di qualsiasi audit di sicurezza reale.
+- **Gateway nginx statico e "a config file".** Instradamento tra i tre ambienti fatto
+  con tre blocchi `server{}` fissi su tre porte diverse (80/8080/8999). Funziona per un
+  contesto didattico/dimostrativo, ma non scala: ogni nuovo ambiente o servizio richiede
+  di editare a mano il file e riavviare il gateway. Un **Ingress Controller dedicato
+  (es. Traefik)** userebbe invece *service discovery* automatico via label sui
+  container/Deployment, TLS automatico (Let's Encrypt), e routing per hostname invece
+  che per porta — più vicino a uno standard "un solo ingresso HTTPS pubblico" piuttosto
+  che tre porte diverse esposte per tre ambienti.
+- **Tre ambienti (prod/test/sio) sullo stesso host Docker Compose.** Va bene per la
+  demo, ma nella realtà prod e non-prod non dovrebbero mai condividere lo stesso host
+  fisico/VM né la stessa rete backend, per limitare il "blast radius" di un incidente
+  in test. Con **Kubernetes** (o anche solo più stack Compose separati) si potrebbero
+  avere namespace/cluster distinti per prod e non-prod, con policy di rete (
+  `NetworkPolicy`) che formalizzano lo stesso principio di segregazione applicato qui
+  a livello di Compose, ma in modo dichiarativo e verificabile in CI.
+- **`AUTH_ENABLED` iniettata come variabile d'ambiente statica al boot.** Per attivare/
+  disattivare l'autenticazione oggi serve ricreare il container. Un sistema di
+  **feature flag dinamici** (es. Unleash, LaunchDarkly, o anche solo un endpoint
+  `/config` interrogato a runtime con caching breve) permetterebbe di attivare/
+  disattivare funzionalità o forzare l'autenticazione in produzione senza downtime,
+  e soprattutto senza il rischio — presente oggi — che l'ambiente PROD parta per
+  errore con `AUTH_ENABLED=false`.
+- **Nessun TLS end-to-end.** Il gateway espone HTTP in chiaro sulle porte 80/8080/8999.
+  Per dati sanitari reali servirebbe HTTPS obbligatorio (anche solo terminato sul
+  gateway, con certificati validi) e possibilmente mTLS tra gateway e backend.
+- **`restart: always` senza healthcheck.** Nessun servizio definisce `healthcheck`:
+  Docker riavvia un container "morto" ma non uno che risponde 500 in loop. Aggiungere
+  healthcheck su `backend` e `db` renderebbe `depends_on` effettivamente affidabile
+  (con `condition: service_healthy`) invece che un semplice ordine di avvio.
