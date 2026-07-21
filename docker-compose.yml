@@ -102,14 +102,17 @@ services:
       - "80:80"
       - "8080:8080"
       - "8999:8999"
+      - "5432:5432"   # Task 4: tunnel TCP verso il DB, mediato dal Gateway
     volumes:
-      - ./gateway:/etc/nginx/conf.d/:ro
+      - ./gateway/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./gateway/conf.d:/etc/nginx/conf.d/:ro
     depends_on:
       - fe-sio
       - fe-prod
       - fe-test
       - backend-blue
       - backend-green
+      - db
     restart: always
     networks:
       - frontend-net
