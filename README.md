@@ -1,156 +1,101 @@
-# Task 2 — Il "Cambio di Binario" delle API (Blue/Green Backend)
+# Task 3 — Zero-Downtime Backend & Database Migration
  
-## 1. Modifiche applicate
+Questo task riusa l'infrastruttura del Task 2 (due container backend + switch al
+Gateway) e la estende con il tema centrale: **cosa succede allo schema del database
+quando `green` ha bisogno di una modifica che `blue` non conosce**.
  
-### `docker-compose.yml`
-Il servizio `backend` è stato duplicato in due servizi indipendenti che condividono
-la stessa immagine/Dockerfile ma girano come container separati:
+## 1. Due container backend
  
-- `backend-blue` → container `sio-backend-blue`
-- `backend-green` → container `sio-backend-green`
-Entrambi:
-- si connettono allo **stesso** `db`;
-- restano sulla `backend-net` (nessuna porta pubblicata sull'host);
-- ricevono una variabile `BACKEND_INSTANCE` (`blue` / `green`) usata solo a scopo
-  diagnostico, per poter verificare *quale* istanza sta effettivamente rispondendo.
-- possono essere costruiti da versioni diverse del codice tramite le variabili
-  `BLUE_VERSION` / `GREEN_VERSION` (stesso pattern già usato per i frontend con
-  `PROD_VERSION`/`TEST_VERSION`/`SVI_VERSION`), così da poter avere `backend-green`
-  con un tag immagine diverso da `backend-blue` senza duplicare il Dockerfile.
-### `backend/services/health.js`
-Aggiunto il campo `instance` alla risposta di `/health`, valorizzato da
-`BACKEND_INSTANCE`:
+Già soddisfatto dal Task 2: `sio-backend-blue` e `sio-backend-green`, stesso `db`,
+stesso schema, nessuna porta pubblicata sull'host (vedi sezione Task 2 e Task 1 per
+l'isolamento di rete).
  
-```json
-{
-  "status": "success",
-  "data": { "service": "UP", "instance": "blue", "database": "CONNECTED", "uptime": 123.4 }
-}
-```
+## 2. Switch istantaneo del Gateway
  
-Serve esclusivamente a rendere visibile "chi risponde" durante i test di switch/
-rollback — non è un requisito del cliente ma rende la dimostrazione verificabile.
+Anche questo è già implementato nel Task 2 tramite l'`upstream sio-backend-api` in
+`gateway/default.conf`, con switch via commento/decommento di una riga + `nginx -s
+reload`.
  
-### `gateway/default.conf`
-Le tre `location /api/` (PROD/TEST/SVI) puntavano tutte a `http://sio-backend:3000`,
-cioè al vecchio nome del servizio unico. Invece di modificare tre righe indipendenti
-(e rischiare di dimenticarne una), ho introdotto un **upstream nginx unico**,
-`sio-backend-api`, referenziato da tutti e tre gli ambienti:
+Una nota di design importante, richiesta implicitamente dal "senza mai staccare la
+spina" del cliente: ho **volutamente scelto `nginx -s reload` e non un
+`docker compose restart gateway`**. Il Gateway è l'unico container che espone porte
+verso l'host (Task 1): riavviarlo, anche per una manciata di secondi, causerebbe un
+buco di connettività per *tutto* il traffico, compresi i frontend statici — non solo
+per le API. Il `reload` invece fa ricaricare la configurazione al processo master di
+nginx, che avvia nuovi worker con la config aggiornata e lascia terminare quelli
+vecchi in modo graceful, senza mai chiudere il socket in ascolto sulla porta 80/8080/
+8999. Un'alternativa "a variabile d'ambiente" (es. `ACTIVE_BACKEND=green` sostituita
+via `envsubst` all'avvio del container, come già fa il frontend con `env.js`)
+sembrerebbe più elegante, ma richiederebbe comunque di ricreare il container gateway
+per rileggere la env var — motivo per cui ho preferito l'approccio a file + reload,
+che è vero zero-downtime anche per il Gateway stesso.
  
-```nginx
-upstream sio-backend-api {
-    server sio-backend-blue:3000;   # <-- versione LIVE attuale (BLUE)
-    # server sio-backend-green:3000;
-}
-...
-location /api/ {
-    rewrite ^/api/(.*)$ /$1 break;
-    proxy_pass http://sio-backend-api;
-}
-```
+## 3. Il dilemma del Database
  
-Questa è la richiesta del cliente: un solo punto di configurazione
-che decide quale motore riceve il traffico, per tutti e tre gli ambienti
-contemporaneamente.
+È la parte nuova rispetto al Task 2. Ho creato `db/migrations/` con un caso concreto:
  
-## 2. Procedura di switch BLUE → GREEN
+- **`001_add_priorita_clinica.sql`** — `backend-green` introduce un nuovo algoritmo
+  di triage che calcola un punteggio di priorità clinica e lo vuole salvare su
+  `admissions`. La migrazione aggiunge la colonna `priorita_clinica` **nullable, con
+  `DEFAULT NULL`**, senza toccare nient'altro. Ho verificato nel codice
+  (`backend/services/patients.js`) che le `INSERT` elencano esplicitamente le colonne
+  (`INSERT INTO admissions (patient_id, braccialetto, stato, ...)`), quindi
+  `backend-blue` continua a funzionare **senza alcuna modifica al proprio codice**:
+  semplicemente non imposta e non conosce il nuovo campo, che per le sue righe resta
+  `NULL`. Su Postgres ≥11 `ADD COLUMN ... DEFAULT NULL` è un'operazione di solo
+  metadata (nessun riscrittura di tabella, nessun lock lungo), quindi applicabile a
+  caldo mentre `blue` serve traffico reale.
+- **`002_enforce_priorita_clinica_NOT_RUN_YET.sql`** — mostra la fase successiva
+  ("contract"): backfill dei valori storici e solo *dopo* aver spento definitivamente
+  `blue` si stringe il vincolo a `NOT NULL`. Il nome del file è deliberatamente
+  esplicito ("NOT_RUN_YET") per marcare che non va eseguita nella stessa finestra
+  operativa della 001.
+- **`db/migrations/README.md`** — descrive il pattern generale
+  **Expand → Migrate → Contract** e la regola pratica da seguire finché blue e green
+  coesistono: si può sempre *aggiungere* (colonne, tabelle, valori enum in coda), mai
+  *rinominare/restringere/eliminare* qualcosa che una delle due versioni usa ancora.
+Rispondendo direttamente alla domanda del cliente ("se l'aggiornamento fallisce, i
+dati devono restare integri"): con questo approccio un rollback del Gateway a `blue`
+non "rompe" nulla a livello di schema, perché `blue` non ha mai smesso di essere
+compatibile con la struttura del DB — la migrazione additiva non gli ha tolto né
+richiesto nulla. Il rischio residuo (dati scritti da `green` prima di un rollback,
+vedi riflessione nel Task 2) resta comunque presente e va gestito a livello applicativo,
+non risolvibile dalla sola migrazione additiva.
  
-```bash
-# 1. Build & avvio di entrambe le istanze backend (già presenti nel compose)
-docker compose up -d --build backend-blue backend-green
+## 4. Impatto sul Frontend e sessioni JWT
  
-# 2. Verifica che green sia sano PRIMA di spostare traffico
-docker exec sio-gateway wget -qO- http://sio-backend-green:3000/health
-# -> {"status":"success","data":{"service":"UP","instance":"green", ...}}
+- **Il frontend NON deve essere ricaricato.** I frontend (`fe-prod`/`fe-test`/`fe-sio`)
+  parlano sempre e solo con `http://<gateway>/api/...`: non conoscono l'esistenza di
+  `blue`/`green`, l'URL non cambia. Lo switch è completamente trasparente lato
+  browser: la prossima richiesta XHR/fetch dopo il reload del Gateway viene
+  semplicemente instradata al nuovo backend, senza che l'utente se ne accorga né
+  debba fare un refresh della pagina.
+- **Le sessioni JWT restano valide *a patto che* `blue` e `green` condividano lo
+  stesso `JWT_SECRET`** (già vero nella configurazione attuale: entrambi i servizi
+  nel compose usano la stessa stringa). Un token emesso da `blue` viene verificato
+  correttamente da `green` e viceversa, perché la verifica JWT è stateless (si basa
+  sulla firma HMAC col secret, non su uno stato salvato lato server). Non c'è quindi
+  bisogno di "migrare" le sessioni attive: continuano a funzionare invariate durante
+  e dopo lo switch.
+- **Rischio da non sottovalutare**: se `green` cambia la *struttura* del payload del
+  token (nuovi claim obbligatori, algoritmo di firma diverso, secret ruotato) senza
+  garantire retro-compatibilità, gli utenti già loggati su `blue` verrebbero
+  disconnessi bruscamente al primo switch — un'esperienza peggiore di un semplice
+  downtime pianificato, perché sembra un bug intermittente. La stessa logica
+  "additiva" vista per il DB va applicata ai token: nuovi claim opzionali sì, secret o
+  claim obbligatori esistenti rimossi/rinominati no, finché non si è sicuri che tutti
+  gli utenti abbiano fatto un nuovo login (o si preveda un breve periodo in cui
+  entrambi i formati di token sono accettati in validazione).
+## 5. Orchestrazione Docker: nessun conflitto di porta
  
-# 3. Edit gateway/default.conf: commenta la riga "blue", decommenta "green"
-#    upstream sio-backend-api {
-#        # server sio-backend-blue:3000;
-#        server sio-backend-green:3000;
-#    }
- 
-# 4. Reload "a caldo" del gateway, SENZA riavviarlo/spegnerlo
-docker exec sio-gateway nginx -s reload
- 
-# 5. Conferma che il traffico ora arriva a green
-curl http://localhost/api/health
-# -> "instance": "green"
-```
- 
-Il passo 4 è la chiave del task: `nginx -s reload` ricarica la configurazione senza
-chiudere le connessioni esistenti né fermare il processo master → **zero downtime**
-percepito dal frontend, che continua a chiamare `/api/...` sullo stesso gateway,
-stessa porta, senza sapere nulla del cambio.
- 
-## 3. Procedura di rollback (GREEN → BLUE)
- 
-Esattamente speculare, ed è la parte che il cliente sottolinea come critica
-("dovete poter tornare al motore vecchio in un istante"):
- 
-```bash
-# 1. Ripristina la riga "blue" nell'upstream, commenta "green"
-# 2. Reload a caldo
-docker exec sio-gateway nginx -s reload
-# 3. Conferma
-curl http://localhost/api/health   # -> "instance": "blue"
-```
- 
-Tempo di rollback: il tempo di un reload nginx, tipicamente sotto il secondo, e non
-richiede riavviare né il gateway né alcun frontend. `backend-green` resta comunque
-acceso e raggiungibile internamente per essere ispezionato/debuggato (log, `docker
-exec`) senza fretta, dato che non riceve più traffico reale.
- 
-## 4. Riflessione: cosa succede ai dati scritti da GREEN in caso di rollback?
- 
-**Il dato rimane.** Il rollback qui agisce solo sul livello di **routing HTTP** (quale
-processo backend riceve le richieste), non sul livello dati. Entrambi i backend
-condividono lo stesso `db` e lo stesso schema — non c'è alcuna replica o database
-separato per `green`. Quindi:
- 
-- Se `backend-green` esegue una `INSERT`/`UPDATE` (es. registra un nuovo accesso in
-  pronto soccorso) e subito dopo si fa rollback a `blue`, quella riga **resta nel
-  database** esattamente come se l'avesse scritta `blue`. `blue` la vedrà e la potrà
-  leggere/modificare normalmente, perché opera sulle stesse tabelle.
-- Questo è **corretto e voluto** per un rollback "di routing puro" come questo: se il
-  bug in `green` è, ad esempio, un errore nel calcolo di un campo UI o in una
-  validazione lato codice, i dati scritti prima di accorgersi del problema restano
-  validi (non è detto siano "sbagliati": dipende dalla natura del bug).
-- **Rischio reale**: se il bug in `green` riguarda proprio la logica di scrittura (es.
-  un campo salvato nel formato sbagliato, una migrazione di schema mancante, un
-  constraint non rispettato), il rollback del *routing* non annulla quelle scritture
-  "sporche" già presenti nel DB. Il rollback qui protegge la disponibilità del
-  servizio, non la consistenza dei dati già scritti da green.
-- Per questo, in un contesto reale (specialmente sanitario, dove l'integrità del dato
-  è critica quanto la disponibilità) uno schema blue/green "puro" a DB condiviso va
-  usato solo quando le modifiche di `green` sono **backward-compatible** con lo schema
-  esistente e non introducono side-effect distruttivi. Se `green` porta con sé
-  modifiche di schema (nuove colonne obbligatorie, migrazioni, cambio di formato),
-  serve una strategia più prudente: migrazioni sempre *additive e retro-compatibili*
-  (mai rimuovere/rinominare colonne che blue usa ancora), oppure — per modifiche non
-  compatibili — un vero e proprio "dual write" temporaneo o una feature flag lato
-  applicativo, non solo uno switch di routing al Gateway.
-## 5. Osservazioni critiche e possibili evoluzioni
- 
-- **Switch manuale via file + reload.** Funziona bene per una dimostrazione controllata,
-  ma è un'operazione manuale, soggetta a errore umano (dimenticare di commentare una
-  riga, editare l'ambiente sbagliato). In un'infrastruttura più matura questo passaggio
-  andrebbe automatizzato: uno script/pipeline CI che genera il `default.conf` a partire
-  da una variabile (`ACTIVE_BACKEND=blue|green`) invece di un edit manuale del file,
-  o — meglio ancora — un **Ingress Controller come Traefik**, che supporta
-  weighted round-robin tra due servizi (per un canary graduale, es. 10% → 50% → 100%
-  su green) invece di uno switch netto 0%/100% come quello attuale con nginx statico.
-- **Nessun health-check automatico pre-switch.** Qui la verifica che `green` sia sano
-  prima dello switch (`/health`) è manuale. Un orchestratore come **Kubernetes**, con
-  un `Service` che seleziona i pod via `label` (`version: blue` / `version: green`) e
-  readiness probe, sposterebbe il traffico automaticamente solo verso pod già pronti,
-  e un semplice `kubectl patch` sul selector del Service otterrebbe lo stesso identico
-  effetto di switch istantaneo ottenuto qui con l'upstream nginx, ma con più garanzie
-  (nessun traffico instradato verso un'istanza non ancora pronta).
-- **PROD/TEST/SVI condividono lo stesso upstream.** Con la modifica attuale, spostare
-  l'upstream su `green` sposta il traffico API per *tutti e tre* gli ambienti insieme.
-  Nella pratica, ha più senso testare `green` prima su TEST/SVI e solo dopo, a fronte
-  di esito positivo, promuoverlo su PROD: questo richiederebbe upstream distinti per
-  ambiente (es. `sio-backend-api-test`, `sio-backend-api-prod`), a scapito di un po' di
-  duplicazione ma con isolamento del rischio più corretto — un classico esempio di
-  come una feature flag dinamica per-ambiente sarebbe più sicura di un'unica variabile
-  di routing globale.
+`backend-blue` e `backend-green` costruiscono dalla stessa immagine (`EXPOSE 3000`)
+ma, come per `db`, **non pubblicano alcuna porta verso l'host** (`ports` è assente/
+commentato). Questo evita per costruzione qualunque conflitto: se entrambi provassero
+a fare il bind della 3000 sull'host si otterrebbe un errore all'avvio ("port is
+already allocated"). Restando invece solo su `backend-net` con `container_name`
+diversi, ciascuno riceve il proprio DNS interno univoco (`sio-backend-blue`,
+`sio-backend-green`) e la propria porta 3000 "privata" nel proprio network
+namespace — Docker non ha bisogno di negoziare nulla perché ogni container ha il
+proprio stack di rete isolato. È esattamente lo stesso principio già applicato ai tre
+frontend (`fe-prod`/`fe-test`/`fe-sio`), che condividono tutti la porta 80
+internamente senza conflitti, per lo stesso motivo.
