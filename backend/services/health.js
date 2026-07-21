@@ -4,6 +4,7 @@ import {catchAsync} from "../utils/errorHandler.js";
 export const retrieveHealthStatusFn = catchAsync(async (req, res) => {
 	const healthStatus = {
 		service: 'UP',
+		instance: process.env.BACKEND_INSTANCE || 'unknown',
 		database: 'UNKNOWN',
 		uptime: process.uptime()
 	};

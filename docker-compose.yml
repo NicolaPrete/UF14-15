@@ -16,9 +16,11 @@ services:
     networks:
       - backend-net
 
-  backend:
+  # --- BACKEND BLUE (versione attualmente "live") ---
+  backend-blue:
     build: ./backend
-    container_name: sio-backend
+    image: his-afp-backend:${BLUE_VERSION:-latest}
+    container_name: sio-backend-blue
     #    ports:
     #      - "3000:3000"
     environment:
@@ -28,6 +30,28 @@ services:
       DB_NAME: sio_db
       JWT_SECRET: "chiave_segreta_super_sicura_per_il_corso_segretissimissima"
       AUTH_ENABLED: "false"
+      BACKEND_INSTANCE: "blue"
+    depends_on:
+      - db
+    restart: always
+    networks:
+      - backend-net
+
+  # --- BACKEND GREEN (nuova versione in affiancamento) ---
+  backend-green:
+    build: ./backend
+    image: his-afp-backend:${GREEN_VERSION:-latest}
+    container_name: sio-backend-green
+    #    ports:
+    #      - "3000:3000"
+    environment:
+      DB_HOST: db
+      DB_USER: sio_user
+      DB_PASS: sio_password
+      DB_NAME: sio_db
+      JWT_SECRET: "chiave_segreta_super_sicura_per_il_corso_segretissimissima"
+      AUTH_ENABLED: "false"
+      BACKEND_INSTANCE: "green"
     depends_on:
       - db
     restart: always
@@ -84,7 +108,8 @@ services:
       - fe-sio
       - fe-prod
       - fe-test
-      - backend
+      - backend-blue
+      - backend-green
     restart: always
     networks:
       - frontend-net
