@@ -1,0 +1,718 @@
+diff --git a/his-afp/src/app/app.routes.ts b/his-afp/src/app/app.routes.ts
+index 6dc6c0d..bf75958 100644
+--- a/his-afp/src/app/app.routes.ts
++++ b/his-afp/src/app/app.routes.ts
+@@ -24,6 +24,13 @@ export const routes: Routes = [
+     loadComponent: () =>
+       import('./features/stato-servizi/stato-servizi').then((m) => m.StatoServizi),
+   },
++  {
++    path: 'gestione-personale',
++    loadComponent: () =>
++      import('./features/gestione-personale/gestione-personale').then(
++        (m) => m.GestionePersonale,
++      ),
++  },
+   {
+     path: '',
+     redirectTo: 'lista-pz',
+diff --git a/his-afp/src/app/core/Staff/staff-manager.spec.ts b/his-afp/src/app/core/Staff/staff-manager.spec.ts
+new file mode 100644
+index 0000000..4e780f4
+--- /dev/null
++++ b/his-afp/src/app/core/Staff/staff-manager.spec.ts
+@@ -0,0 +1,16 @@
++import { TestBed } from '@angular/core/testing';
++
++import { StaffManager } from './staff-manager';
++
++describe('StaffManager', () => {
++  let service: StaffManager;
++
++  beforeEach(() => {
++    TestBed.configureTestingModule({});
++    service = TestBed.inject(StaffManager);
++  });
++
++  it('should be created', () => {
++    expect(service).toBeTruthy();
++  });
++});
+diff --git a/his-afp/src/app/core/Staff/staff-manager.ts b/his-afp/src/app/core/Staff/staff-manager.ts
+new file mode 100644
+index 0000000..723cf4c
+--- /dev/null
++++ b/his-afp/src/app/core/Staff/staff-manager.ts
+@@ -0,0 +1,94 @@
++import { inject, Injectable, signal } from '@angular/core';
++import { HttpClient } from '@angular/common/http';
++import { Observable } from 'rxjs';
++import { map, tap } from 'rxjs/operators';
++import { environment } from '../../../environments/environment';
++import { APIResponse } from '../models/APIResponse.model';
++import { NewStaff, Staff, UserRole, UsernameAvailability } from './staff.model';
++
++@Injectable({
++  providedIn: 'root',
++})
++export class StaffManager {
++  readonly #http = inject(HttpClient);
++
++  readonly #staffList = signal<Staff[]>([]);
++  staffList = this.#staffList.asReadonly();
++
++  readonly #loading = signal<boolean>(false);
++  loading = this.#loading.asReadonly();
++
++  /**
++   * Recupera l'elenco completo dello staff (attivo e disattivato).
++   */
++  public fetchStaff() {
++    this.#loading.set(true);
++    this.#http.get<APIResponse<Staff[]>>(`${environment.apiUrl}/users`).subscribe({
++      next: (res) => {
++        this.#staffList.set(res.data);
++        this.#loading.set(false);
++      },
++      error: (err) => {
++        console.error("Errore durante il fetch dell'elenco dello staff:", err);
++        this.#loading.set(false);
++      },
++    });
++  }
++
++  /**
++   * Verifica in tempo reale la disponibilità di uno username.
++   * Utilizzato dall'AsyncValidator del form di creazione operatore.
++   */
++  public checkUsernameAvailability(username: string): Observable<boolean> {
++    return this.#http
++      .get<APIResponse<UsernameAvailability>>(
++        `${environment.apiUrl}/users/check/${encodeURIComponent(username)}`,
++      )
++      .pipe(map((res) => res.data.available));
++  }
++
++  /**
++   * Crea un nuovo operatore e aggiorna in maniera ottimistica la lista in memoria.
++   */
++  public createStaff(nuovoOperatore: NewStaff): Observable<APIResponse<Staff>> {
++    return this.#http
++      .post<APIResponse<Staff>>(`${environment.apiUrl}/users`, nuovoOperatore)
++      .pipe(
++        tap((res) => {
++          const nuovo: Staff = { ...res.data, isActive: true };
++          this.#staffList.update((list) =>
++            [...list, nuovo].sort((a, b) => a.username.localeCompare(b.username)),
++          );
++        }),
++      );
++  }
++
++  /**
++   * Modifica il ruolo di un operatore esistente.
++   */
++  public editUserRole(id: number, role: UserRole): Observable<APIResponse<Staff>> {
++    return this.#http
++      .patch<APIResponse<Staff>>(`${environment.apiUrl}/users/${id}/editrole`, { role })
++      .pipe(
++        tap((res) => {
++          this.#staffList.update((list) =>
++            list.map((s) => (s.id === id ? { ...s, role: res.data.role } : s)),
++          );
++        }),
++      );
++  }
++
++  /**
++   * Attiva o disattiva un operatore (gestione accessi al sistema).
++   */
++  public setActivation(id: number, active: boolean): Observable<APIResponse<unknown>> {
++    const url = `${environment.apiUrl}/users/${id}/${active ? 'activate' : 'deactivate'}`;
++    return this.#http.patch<APIResponse<unknown>>(url, {}).pipe(
++      tap(() => {
++        this.#staffList.update((list) =>
++          list.map((s) => (s.id === id ? { ...s, isActive: active } : s)),
++        );
++      }),
++    );
++  }
++}
+diff --git a/his-afp/src/app/core/Staff/staff.model.ts b/his-afp/src/app/core/Staff/staff.model.ts
+new file mode 100644
+index 0000000..139ac9c
+--- /dev/null
++++ b/his-afp/src/app/core/Staff/staff.model.ts
+@@ -0,0 +1,29 @@
++export type UserRole = 'DOC' | 'INF' | 'AMM';
++
++export interface RoleOption {
++  code: UserRole;
++  label: string;
++}
++
++export const ROLE_OPTIONS: RoleOption[] = [
++  { code: 'DOC', label: 'Medico' },
++  { code: 'INF', label: 'Infermiere' },
++  { code: 'AMM', label: 'Amministrativo' },
++];
++
++export interface Staff {
++  id: number;
++  username: string;
++  role: UserRole;
++  isActive: boolean;
++}
++
++export interface NewStaff {
++  username: string;
++  password: string;
++  role: UserRole;
++}
++
++export interface UsernameAvailability {
++  available: boolean;
++}
+diff --git a/his-afp/src/app/core/Staff/username-disponibile.validator.spec.ts b/his-afp/src/app/core/Staff/username-disponibile.validator.spec.ts
+new file mode 100644
+index 0000000..e0aa5c4
+--- /dev/null
++++ b/his-afp/src/app/core/Staff/username-disponibile.validator.spec.ts
+@@ -0,0 +1,52 @@
++import { FormControl, ValidationErrors } from '@angular/forms';
++import { firstValueFrom, Observable, of } from 'rxjs';
++import { usernameDisponibileValidator } from './username-disponibile.validator';
++import { StaffManager } from './staff-manager';
++
++/**
++ * Il tipo AsyncValidatorFn ammette come ritorno sia Observable che Promise;
++ * la nostra implementazione restituisce sempre un Observable, quindi
++ * effettuiamo un cast esplicito e tipizzato (nessun `any`) per poterlo
++ * consumare con firstValueFrom nei test.
++ */
++function eseguiValidator(
++  validatorResult: ReturnType<ReturnType<typeof usernameDisponibileValidator>>,
++): Promise<ValidationErrors | null> {
++  return firstValueFrom(validatorResult as Observable<ValidationErrors | null>);
++}
++
++describe('usernameDisponibileValidator', () => {
++  function mockStaffManager(available: boolean): StaffManager {
++    return {
++      checkUsernameAvailability: () => of(available),
++    } as unknown as StaffManager;
++  }
++
++  it('non effettua alcuna chiamata se il campo è vuoto', async () => {
++    const staffManager = mockStaffManager(true);
++    const validator = usernameDisponibileValidator(staffManager);
++    const result = await eseguiValidator(validator(new FormControl('')));
++    expect(result).toBeNull();
++  });
++
++  it('non effettua alcuna chiamata se il valore coincide con lo username originale (modifica)', async () => {
++    const staffManager = mockStaffManager(false);
++    const validator = usernameDisponibileValidator(staffManager, 'mrossi');
++    const result = await eseguiValidator(validator(new FormControl('mrossi')));
++    expect(result).toBeNull();
++  });
++
++  it('restituisce null quando lo username è disponibile', async () => {
++    const staffManager = mockStaffManager(true);
++    const validator = usernameDisponibileValidator(staffManager);
++    const result = await eseguiValidator(validator(new FormControl('nuovo.utente')));
++    expect(result).toBeNull();
++  });
++
++  it('restituisce un errore quando lo username è già in uso', async () => {
++    const staffManager = mockStaffManager(false);
++    const validator = usernameDisponibileValidator(staffManager);
++    const result = await eseguiValidator(validator(new FormControl('mrossi')));
++    expect(result).toEqual({ usernameNonDisponibile: true });
++  });
++});
+diff --git a/his-afp/src/app/core/Staff/username-disponibile.validator.ts b/his-afp/src/app/core/Staff/username-disponibile.validator.ts
+new file mode 100644
+index 0000000..7d235ab
+--- /dev/null
++++ b/his-afp/src/app/core/Staff/username-disponibile.validator.ts
+@@ -0,0 +1,32 @@
++import { AbstractControl, AsyncValidatorFn, ValidationErrors } from '@angular/forms';
++import { Observable, of, timer } from 'rxjs';
++import { catchError, map, switchMap } from 'rxjs/operators';
++import { StaffManager } from './staff-manager';
++
++/**
++ * AsyncValidator che verifica in tempo reale, mentre l'utente compila il campo,
++ * che lo username scelto non sia già in uso da un altro operatore.
++ *
++ * @param staffManager servizio incaricato di interrogare il backend
++ * @param usernameOriginale se valorizzato (form di modifica), non viene eseguita
++ *        alcuna chiamata quando il valore coincide con lo username già assegnato
++ */
++export function usernameDisponibileValidator(
++  staffManager: StaffManager,
++  usernameOriginale?: string,
++): AsyncValidatorFn {
++  return (control: AbstractControl): Observable<ValidationErrors | null> => {
++    const value = (control.value ?? '').trim();
++
++    if (!value || value === usernameOriginale) {
++      return of(null);
++    }
++
++    // Piccolo debounce per evitare una chiamata ad ogni singolo tasto premuto.
++    return timer(400).pipe(
++      switchMap(() => staffManager.checkUsernameAvailability(value)),
++      map((disponibile) => (disponibile ? null : { usernameNonDisponibile: true })),
++      catchError(() => of(null)),
++    );
++  };
++}
+diff --git a/his-afp/src/app/features/gestione-personale/gestione-personale.html b/his-afp/src/app/features/gestione-personale/gestione-personale.html
+new file mode 100644
+index 0000000..6251a61
+--- /dev/null
++++ b/his-afp/src/app/features/gestione-personale/gestione-personale.html
+@@ -0,0 +1,214 @@
++<div class="flex flex-row items-center justify-between pb-4">
++  <h1>Gestione del Personale</h1>
++  <p-button (onClick)="apriCreazione()" icon="pi pi-user-plus" label="Nuovo Operatore" />
++</div>
++
++<p-table [loading]="staffManager.loading()" [value]="staffManager.staffList()" dataKey="id">
++  <ng-template #header>
++    <tr>
++      <th>Username</th>
++      <th>Ruolo</th>
++      <th>Stato</th>
++      <th>Azioni</th>
++    </tr>
++  </ng-template>
++  <ng-template #body let-operatore>
++    <tr>
++      <td>{{ operatore.username }}</td>
++      <td>
++        <p-tag [value]="roleLabel(operatore.role)" severity="info" />
++      </td>
++      <td>
++        <p-tag
++          [severity]="operatore.isActive ? 'success' : 'danger'"
++          [value]="operatore.isActive ? 'Attivo' : 'Disattivo'"
++        />
++      </td>
++      <td>
++        <div class="flex flex-row gap-2">
++          <p-button
++            (onClick)="apriModifica(operatore)"
++            [text]="true"
++            icon="pi pi-pencil"
++            label="Modifica ruolo"
++          />
++          <p-button
++            (onClick)="toggleAttivazione(operatore)"
++            [severity]="operatore.isActive ? 'warn' : 'success'"
++            [text]="true"
++            [icon]="operatore.isActive ? 'pi pi-lock' : 'pi pi-lock-open'"
++            [label]="operatore.isActive ? 'Disattiva' : 'Attiva'"
++          />
++        </div>
++      </td>
++    </tr>
++  </ng-template>
++  <ng-template #emptymessage>
++    <tr>
++      <td colspan="4">Nessun operatore presente in anagrafica.</td>
++    </tr>
++  </ng-template>
++</p-table>
++
++<!-- DIALOG: Nuovo Operatore -->
++<p-dialog
++  (visibleChange)="showCreateDialog.set($event)"
++  [modal]="true"
++  [style]="{ width: '28rem' }"
++  [visible]="showCreateDialog()"
++  header="Nuovo Operatore"
++>
++  <form (submit)="onSubmitCreazione()" [formGroup]="nuovoOperatoreForm">
++    <div class="flex flex-col gap-4 pt-2">
++      <div class="flex flex-col gap-1">
++        <label for="username">Nome utente:</label>
++        <input
++          [invalid]="checkFormControl(nuovoOperatoreForm, 'username')"
++          formControlName="username"
++          id="username"
++          pInputText
++          type="text"
++        />
++        @if (nuovoOperatoreForm.get('username')?.pending) {
++          <p-message severity="secondary" variant="simple">
++            Verifica disponibilità username in corso...
++          </p-message>
++        }
++        @if (checkFormControl(nuovoOperatoreForm, 'username')) {
++          @if (checkFormControlError(nuovoOperatoreForm, 'username', 'required')) {
++            <p-message severity="error" variant="simple">
++              Il campo 'Nome utente' è obbligatorio.
++            </p-message>
++          }
++          @if (checkFormControlError(nuovoOperatoreForm, 'username', 'minlength')) {
++            <p-message severity="error" variant="simple">
++              Il campo 'Nome utente' deve contenere almeno
++              {{ checkFormControlError(nuovoOperatoreForm, 'username', 'minlength').requiredLength }}
++              caratteri.
++            </p-message>
++          }
++          @if (checkFormControlError(nuovoOperatoreForm, 'username', 'usernameNonDisponibile')) {
++            <p-message severity="error" variant="simple">
++              Questo nome utente è già in uso da un altro operatore.
++            </p-message>
++          }
++        }
++      </div>
++
++      <div class="flex flex-col gap-1">
++        <label for="password">Password:</label>
++        <p-password
++          [feedback]="false"
++          [invalid]="checkFormControl(nuovoOperatoreForm, 'password')"
++          [toggleMask]="true"
++          formControlName="password"
++          id="password"
++        />
++        @if (checkFormControl(nuovoOperatoreForm, 'password')) {
++          @if (checkFormControlError(nuovoOperatoreForm, 'password', 'required')) {
++            <p-message severity="error" variant="simple">
++              Il campo 'Password' è obbligatorio.
++            </p-message>
++          }
++          @if (checkFormControlError(nuovoOperatoreForm, 'password', 'minlength')) {
++            <p-message severity="error" variant="simple">
++              La password deve contenere almeno
++              {{ checkFormControlError(nuovoOperatoreForm, 'password', 'minlength').requiredLength }}
++              caratteri.
++            </p-message>
++          }
++        }
++      </div>
++
++      <div class="flex flex-col gap-1">
++        <label for="role">Ruolo:</label>
++        <p-select
++          [invalid]="checkFormControl(nuovoOperatoreForm, 'role')"
++          [options]="roleOptions"
++          formControlName="role"
++          id="role"
++          optionLabel="label"
++          optionValue="code"
++        />
++        @if (checkFormControl(nuovoOperatoreForm, 'role')) {
++          @if (checkFormControlError(nuovoOperatoreForm, 'role', 'required')) {
++            <p-message severity="error" variant="simple">
++              Il campo 'Ruolo' è obbligatorio.
++            </p-message>
++          }
++        }
++      </div>
++
++      @if (erroreServer()) {
++        <p-message severity="error" variant="simple">{{ erroreServer() }}</p-message>
++      }
++
++      <div class="flex flex-row gap-4 pt-2">
++        <p-button
++          [disabled]="nuovoOperatoreForm.pending"
++          [loading]="salvataggioInCorso()"
++          label="Salva"
++          type="submit"
++        />
++        <p-button
++          (onClick)="chiudiCreazione()"
++          label="Annulla"
++          severity="secondary"
++          type="button"
++          variant="outlined"
++        />
++      </div>
++    </div>
++  </form>
++</p-dialog>
++
++<!-- DIALOG: Modifica Ruolo Operatore -->
++<p-dialog
++  (visibleChange)="showEditDialog.set($event)"
++  [modal]="true"
++  [style]="{ width: '24rem' }"
++  [visible]="showEditDialog()"
++  header="Modifica Operatore"
++>
++  <form (submit)="onSubmitModifica()" [formGroup]="modificaRuoloForm">
++    <div class="flex flex-col gap-4 pt-2">
++      <p>
++        Operatore: <b>{{ operatoreInModifica()?.username }}</b>
++      </p>
++
++      <div class="flex flex-col gap-1">
++        <label for="editRole">Ruolo:</label>
++        <p-select
++          [invalid]="checkFormControl(modificaRuoloForm, 'role')"
++          [options]="roleOptions"
++          formControlName="role"
++          id="editRole"
++          optionLabel="label"
++          optionValue="code"
++        />
++        @if (checkFormControl(modificaRuoloForm, 'role')) {
++          @if (checkFormControlError(modificaRuoloForm, 'role', 'required')) {
++            <p-message severity="error" variant="simple">
++              Il campo 'Ruolo' è obbligatorio.
++            </p-message>
++          }
++        }
++      </div>
++
++      @if (erroreServer()) {
++        <p-message severity="error" variant="simple">{{ erroreServer() }}</p-message>
++      }
++
++      <div class="flex flex-row gap-4 pt-2">
++        <p-button [loading]="salvataggioInCorso()" label="Salva" type="submit" />
++        <p-button
++          (onClick)="chiudiModifica()"
++          label="Annulla"
++          severity="secondary"
++          type="button"
++          variant="outlined"
++        />
++      </div>
++    </div>
++  </form>
++</p-dialog>
+diff --git a/his-afp/src/app/features/gestione-personale/gestione-personale.scss b/his-afp/src/app/features/gestione-personale/gestione-personale.scss
+new file mode 100644
+index 0000000..e69de29
+diff --git a/his-afp/src/app/features/gestione-personale/gestione-personale.spec.ts b/his-afp/src/app/features/gestione-personale/gestione-personale.spec.ts
+new file mode 100644
+index 0000000..09d5190
+--- /dev/null
++++ b/his-afp/src/app/features/gestione-personale/gestione-personale.spec.ts
+@@ -0,0 +1,22 @@
++import { ComponentFixture, TestBed } from '@angular/core/testing';
++
++import { GestionePersonale } from './gestione-personale';
++
++describe('GestionePersonale', () => {
++  let component: GestionePersonale;
++  let fixture: ComponentFixture<GestionePersonale>;
++
++  beforeEach(async () => {
++    await TestBed.configureTestingModule({
++      imports: [GestionePersonale],
++    }).compileComponents();
++
++    fixture = TestBed.createComponent(GestionePersonale);
++    component = fixture.componentInstance;
++    await fixture.whenStable();
++  });
++
++  it('should create', () => {
++    expect(component).toBeTruthy();
++  });
++});
+diff --git a/his-afp/src/app/features/gestione-personale/gestione-personale.ts b/his-afp/src/app/features/gestione-personale/gestione-personale.ts
+new file mode 100644
+index 0000000..81d990d
+--- /dev/null
++++ b/his-afp/src/app/features/gestione-personale/gestione-personale.ts
+@@ -0,0 +1,152 @@
++import { ChangeDetectionStrategy, Component, inject, signal } from '@angular/core';
++import { FormBuilder, FormGroup, ReactiveFormsModule, Validators } from '@angular/forms';
++import { HttpErrorResponse } from '@angular/common/http';
++import { TableModule } from 'primeng/table';
++import { Button } from 'primeng/button';
++import { Dialog } from 'primeng/dialog';
++import { InputText } from 'primeng/inputtext';
++import { Password } from 'primeng/password';
++import { Select } from 'primeng/select';
++import { Message } from 'primeng/message';
++import { Tag } from 'primeng/tag';
++import { StaffManager } from '../../core/Staff/staff-manager';
++import { NewStaff, ROLE_OPTIONS, Staff, UserRole } from '../../core/Staff/staff.model';
++import { usernameDisponibileValidator } from '../../core/Staff/username-disponibile.validator';
++
++@Component({
++  selector: 'his-gestione-personale',
++  imports: [
++    ReactiveFormsModule,
++    TableModule,
++    Button,
++    Dialog,
++    InputText,
++    Password,
++    Select,
++    Message,
++    Tag,
++  ],
++  templateUrl: './gestione-personale.html',
++  styleUrl: './gestione-personale.scss',
++  changeDetection: ChangeDetectionStrategy.OnPush,
++})
++export class GestionePersonale {
++  readonly staffManager = inject(StaffManager);
++  readonly roleOptions = ROLE_OPTIONS;
++  readonly #fb = inject(FormBuilder);
++
++  showCreateDialog = signal(false);
++  showEditDialog = signal(false);
++  operatoreInModifica = signal<Staff | null>(null);
++  erroreServer = signal<string | null>(null);
++  salvataggioInCorso = signal(false);
++
++  nuovoOperatoreForm = this.#fb.group({
++    username: [
++      '',
++      [Validators.required, Validators.minLength(4)],
++      [usernameDisponibileValidator(this.staffManager)],
++    ],
++    password: ['', [Validators.required, Validators.minLength(4)]],
++    role: ['', [Validators.required]],
++  });
++
++  modificaRuoloForm = this.#fb.group({
++    role: ['', [Validators.required]],
++  });
++
++  constructor() {
++    this.staffManager.fetchStaff();
++  }
++
++  public roleLabel(role: UserRole): string {
++    return this.roleOptions.find((r) => r.code === role)?.label ?? role;
++  }
++
++  public checkFormControl(form: FormGroup, control: string) {
++    const fc = form.get(control);
++    return fc?.invalid && (fc.touched || fc.dirty);
++  }
++
++  public checkFormControlError(form: FormGroup, control: string, err: string) {
++    const fc = form.get(control);
++    if (fc && fc.hasError(err)) {
++      return fc.getError(err);
++    }
++    return null;
++  }
++
++  public apriCreazione() {
++    this.erroreServer.set(null);
++    this.nuovoOperatoreForm.reset({ username: '', password: '', role: '' });
++    this.showCreateDialog.set(true);
++  }
++
++  public chiudiCreazione() {
++    this.showCreateDialog.set(false);
++  }
++
++  public onSubmitCreazione() {
++    if (this.nuovoOperatoreForm.invalid || this.nuovoOperatoreForm.pending) {
++      this.nuovoOperatoreForm.markAllAsTouched();
++      return;
++    }
++
++    this.erroreServer.set(null);
++    this.salvataggioInCorso.set(true);
++    const nuovoOperatore = this.nuovoOperatoreForm.value as NewStaff;
++
++    this.staffManager.createStaff(nuovoOperatore).subscribe({
++      next: () => {
++        this.salvataggioInCorso.set(false);
++        this.showCreateDialog.set(false);
++      },
++      error: (err: HttpErrorResponse) => {
++        this.salvataggioInCorso.set(false);
++        this.erroreServer.set(err.error?.message ?? "Errore durante la creazione dell'operatore.");
++      },
++    });
++  }
++
++  public apriModifica(staff: Staff) {
++    this.erroreServer.set(null);
++    this.operatoreInModifica.set(staff);
++    this.modificaRuoloForm.reset({ role: staff.role });
++    this.showEditDialog.set(true);
++  }
++
++  public chiudiModifica() {
++    this.showEditDialog.set(false);
++  }
++
++  public onSubmitModifica() {
++    const staff = this.operatoreInModifica();
++    if (!staff || this.modificaRuoloForm.invalid) {
++      this.modificaRuoloForm.markAllAsTouched();
++      return;
++    }
++
++    this.erroreServer.set(null);
++    this.salvataggioInCorso.set(true);
++    const role = this.modificaRuoloForm.value.role as UserRole;
++
++    this.staffManager.editUserRole(staff.id, role).subscribe({
++      next: () => {
++        this.salvataggioInCorso.set(false);
++        this.showEditDialog.set(false);
++      },
++      error: (err: HttpErrorResponse) => {
++        this.salvataggioInCorso.set(false);
++        this.erroreServer.set(err.error?.message ?? "Errore durante la modifica dell'operatore.");
++      },
++    });
++  }
++
++  public toggleAttivazione(staff: Staff) {
++    this.staffManager.setActivation(staff.id, !staff.isActive).subscribe({
++      error: (err) => {
++        console.error("Errore durante l'attivazione/disattivazione dell'operatore:", err);
++      },
++    });
++  }
++}
+diff --git a/his-afp/src/app/ui/header/header.html b/his-afp/src/app/ui/header/header.html
+index 2e9a4de..aa9f71c 100644
+--- a/his-afp/src/app/ui/header/header.html
++++ b/his-afp/src/app/ui/header/header.html
+@@ -53,6 +53,11 @@
+       routerLink="/stato-servizi"
+       variant="outlined"
+     />
++    <p-button
++      label="Gestione Personale"
++      routerLink="/gestione-personale"
++      variant="outlined"
++    />
+   </nav>
+ 
+   <div
+diff --git a/his-afp/src/environments/environment.development.ts b/his-afp/src/environments/environment.development.ts
+index 1cf402d..8bdee03 100644
+--- a/his-afp/src/environments/environment.development.ts
++++ b/his-afp/src/environments/environment.development.ts
+@@ -1,5 +1,5 @@
+ export const environment = {
+-  apiUrl: 'http://localhost:3000',
++  apiUrl: '/api',
+   reparto: 'Pronto Soccorso',
+   struttura: 'Presidio ospedaliero di Arco',
+ };
+diff --git a/his-afp/src/environments/environment.ts b/his-afp/src/environments/environment.ts
+index 1cf402d..8bdee03 100644
+--- a/his-afp/src/environments/environment.ts
++++ b/his-afp/src/environments/environment.ts
+@@ -1,5 +1,5 @@
+ export const environment = {
+-  apiUrl: 'http://localhost:3000',
++  apiUrl: '/api',
+   reparto: 'Pronto Soccorso',
+   struttura: 'Presidio ospedaliero di Arco',
+ };
