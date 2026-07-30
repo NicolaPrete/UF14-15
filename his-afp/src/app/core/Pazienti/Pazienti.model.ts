@@ -60,3 +60,16 @@ export interface PatientAdmissionRes {
   id: number;
   braccialetto: string;
 }
+
+/**
+ * Riga restituita da GET /admissions/reports/discharged.
+ * Le chiavi sono già in camelCase perché la query SQL le alias esplicitamente.
+ */
+export interface PazienteDimesso {
+  braccialetto: string;
+  nome: string;
+  cognome: string;
+  dataOraIngresso: string;
+  dataOraDimissione: string;
+}
+

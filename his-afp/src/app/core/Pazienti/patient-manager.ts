@@ -1,5 +1,5 @@
 import { inject, Injectable, signal } from '@angular/core';
-import { PatientAdmission, PatientAdmissionRes, Paziente, PazienteDTO } from './Pazienti.model';
+import { PatientAdmission, PatientAdmissionRes, Paziente, PazienteDimesso, PazienteDTO } from './Pazienti.model';
 import { HttpClient } from '@angular/common/http';
 import { APIResponse } from '../models/APIResponse.model';
 import { environment } from '../../../environments/environment';
@@ -15,6 +15,14 @@ export class PatientManager {
   #listaPZ = signal<Paziente[]>([]);
   #listaPZFiltered = signal<Paziente[]>(this.#listaPZ());
   listaPZ = this.#listaPZFiltered.asReadonly();
+
+  // Stato del report "Monitor Dimessi (Ultime 24h)" - Task 3
+  readonly #dimessiUltime24h = signal<PazienteDimesso[]>([]);
+  dimessiUltime24h = this.#dimessiUltime24h.asReadonly();
+  readonly #dimessiLoading = signal<boolean>(false);
+  dimessiLoading = this.#dimessiLoading.asReadonly();
+  readonly #dimessiError = signal<string | null>(null);
+  dimessiError = this.#dimessiError.asReadonly();
 
   // constructor() {
   //   this.fetchPazienti();
@@ -104,5 +112,31 @@ export class PatientManager {
       return fullName.includes(name.toLowerCase());
     });
     this.#listaPZFiltered.set(filtered);
+  }
+
+  /**
+   * Recupera i pazienti dimessi (stato DIM) nelle ultime 24 ore, per il
+   * report di sola consultazione "Monitor Dimessi".
+   */
+  public fetchDimessiUltime24h() {
+    this.#dimessiLoading.set(true);
+    this.#dimessiError.set(null);
+
+    this.#http
+      .get<APIResponse<PazienteDimesso[]>>(`${environment.apiUrl}/admissions/reports/discharged`)
+      .subscribe({
+        next: (res) => {
+          this.#dimessiUltime24h.set(res.data);
+          this.#dimessiLoading.set(false);
+        },
+        error: (err) => {
+          console.error('Errore durante il fetch dei pazienti dimessi:', err);
+          this.#dimessiUltime24h.set([]);
+          this.#dimessiLoading.set(false);
+          this.#dimessiError.set(
+            err.error?.message ?? 'Errore durante il recupero dei pazienti dimessi.',
+          );
+        },
+      });
   }
 }

@@ -1,0 +1,50 @@
+<div class="flex flex-row items-center justify-between pb-4">
+  <h1>Monitor Dimessi (Ultime 24h)</h1>
+  <p-button
+    (onClick)="aggiorna()"
+    [loading]="patientManager.dimessiLoading()"
+    icon="pi pi-refresh"
+    label="Aggiorna"
+    severity="secondary"
+    variant="outlined"
+  />
+</div>
+
+@if (patientManager.dimessiError()) {
+  <p-message severity="error" styleClass="mb-4" variant="simple">
+    {{ patientManager.dimessiError() }}
+  </p-message>
+}
+
+<p-table
+  [loading]="patientManager.dimessiLoading()"
+  [sortOrder]="-1"
+  [value]="patientManager.dimessiUltime24h()"
+  dataKey="braccialetto"
+  sortField="dataOraDimissione"
+>
+  <ng-template #header>
+    <tr>
+      <th>Braccialetto</th>
+      <th>Paziente</th>
+      <th>Orario di ingresso</th>
+      <th pSortableColumn="dataOraDimissione">
+        Orario di dimissione
+        <p-sortIcon field="dataOraDimissione" />
+      </th>
+    </tr>
+  </ng-template>
+  <ng-template #body let-pz>
+    <tr>
+      <td>{{ pz.braccialetto }}</td>
+      <td>{{ pz.cognome }} {{ pz.nome }}</td>
+      <td>{{ pz.dataOraIngresso | date: 'dd/MM/yyyy HH:mm' }}</td>
+      <td>{{ pz.dataOraDimissione | date: 'dd/MM/yyyy HH:mm:ss' }}</td>
+    </tr>
+  </ng-template>
+  <ng-template #emptymessage>
+    <tr>
+      <td colspan="4">Nessun paziente dimesso nelle ultime 24 ore.</td>
+    </tr>
+  </ng-template>
+</p-table>

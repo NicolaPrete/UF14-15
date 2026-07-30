@@ -25,6 +25,11 @@ export const routes: Routes = [
       import('./features/stato-servizi/stato-servizi').then((m) => m.StatoServizi),
   },
   {
+    path: 'dimessi-24h',
+    loadComponent: () =>
+      import('./features/dimessi-24h/dimessi-24h').then((m) => m.Dimessi24h),
+  },
+  {
     path: '',
     redirectTo: 'lista-pz',
     pathMatch: 'full',
