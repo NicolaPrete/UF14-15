@@ -60,3 +60,61 @@ export interface PatientAdmissionRes {
   id: number;
   braccialetto: string;
 }
+
+/**
+ * Riga raw restituita da GET /patients/search (colonne snake_case della tabella `patients`).
+ */
+export interface PazienteAnagraficaDTO {
+  id: number;
+  codice_fiscale: string;
+  nome: string;
+  cognome: string;
+  data_nascita: string;
+  sex: string;
+  indirizzo_via: string | null;
+  indirizzo_civico: string | null;
+  comune: string | null;
+  provincia: string | null;
+  created_at: string;
+}
+
+/**
+ * Anagrafica storica di un paziente, così come utilizzata nel frontend (camelCase).
+ */
+export interface PazienteAnagrafica {
+  id: number;
+  codiceFiscale: string;
+  nome: string;
+  cognome: string;
+  dataNascita: string;
+  sesso: string;
+  indirizzoVia: string | null;
+  indirizzoCivico: string | null;
+  comune: string | null;
+  provincia: string | null;
+}
+
+export type ModalitaRicercaPz = 'cf' | 'anagrafica';
+
+export interface CriteriRicercaCF {
+  cf: string;
+}
+
+export interface CriteriRicercaAnagrafica {
+  nome: string;
+  cognome: string;
+  data_nascita: string;
+}
+
+/**
+ * Riga restituita da GET /admissions/reports/discharged.
+ * Le chiavi sono già in camelCase perché la query SQL le alias esplicitamente.
+ */
+export interface PazienteDimesso {
+  braccialetto: string;
+  nome: string;
+  cognome: string;
+  dataOraIngresso: string;
+  dataOraDimissione: string;
+}
+
