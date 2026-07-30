@@ -139,3 +139,6 @@ vite.config.ts.timestamp-*
 
 
 .idea
+tmp/
+*.patch
+*.bundle
