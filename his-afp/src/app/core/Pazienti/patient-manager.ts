@@ -1,5 +1,14 @@
 import { inject, Injectable, signal } from '@angular/core';
-import { PatientAdmission, PatientAdmissionRes, Paziente, PazienteDTO } from './Pazienti.model';
+import {
+  CriteriRicercaAnagrafica,
+  CriteriRicercaCF,
+  PatientAdmission,
+  PatientAdmissionRes,
+  Paziente,
+  PazienteAnagrafica,
+  PazienteAnagraficaDTO,
+  PazienteDTO,
+} from './Pazienti.model';
 import { HttpClient } from '@angular/common/http';
 import { APIResponse } from '../models/APIResponse.model';
 import { environment } from '../../../environments/environment';
@@ -15,6 +24,16 @@ export class PatientManager {
   #listaPZ = signal<Paziente[]>([]);
   #listaPZFiltered = signal<Paziente[]>(this.#listaPZ());
   listaPZ = this.#listaPZFiltered.asReadonly();
+
+  // Stato della ricerca anagrafica (Task 2 - Workflow Ricerca e Accettazione Avanzata)
+  readonly #risultatiRicerca = signal<PazienteAnagrafica[]>([]);
+  risultatiRicerca = this.#risultatiRicerca.asReadonly();
+  readonly #ricercaEseguita = signal<boolean>(false);
+  ricercaEseguita = this.#ricercaEseguita.asReadonly();
+  readonly #ricercaInCorso = signal<boolean>(false);
+  ricercaInCorso = this.#ricercaInCorso.asReadonly();
+  readonly #erroreRicerca = signal<string | null>(null);
+  erroreRicerca = this.#erroreRicerca.asReadonly();
 
   // constructor() {
   //   this.fetchPazienti();
@@ -104,5 +123,74 @@ export class PatientManager {
       return fullName.includes(name.toLowerCase());
     });
     this.#listaPZFiltered.set(filtered);
+  }
+
+  /**
+   * Ricerca un paziente in anagrafica tramite Codice Fiscale (ricerca esatta).
+   */
+  public cercaPerCodiceFiscale(codiceFiscale: string) {
+    this.eseguiRicercaPazienti({ cf: codiceFiscale });
+  }
+
+  /**
+   * Ricerca un paziente in anagrafica tramite Nome, Cognome e Data di nascita.
+   * dataNascita deve essere in formato ISO (yyyy-mm-dd).
+   */
+  public cercaPerAnagrafica(nome: string, cognome: string, dataNascita: string) {
+    this.eseguiRicercaPazienti({ nome, cognome, data_nascita: dataNascita });
+  }
+
+  /**
+   * Azzera lo stato della ricerca (es. quando si cambia modalità o si seleziona "Nuovo Paziente").
+   */
+  public resetRicerca() {
+    this.#risultatiRicerca.set([]);
+    this.#ricercaEseguita.set(false);
+    this.#erroreRicerca.set(null);
+  }
+
+  private eseguiRicercaPazienti(criteri: CriteriRicercaCF | CriteriRicercaAnagrafica) {
+    this.#ricercaInCorso.set(true);
+    this.#erroreRicerca.set(null);
+
+    this.#http
+      .get<APIResponse<PazienteAnagraficaDTO[]>>(`${environment.apiUrl}/patients/search`, {
+        params: { ...criteri },
+      })
+      .subscribe({
+        next: (res) => {
+          this.#risultatiRicerca.set(
+            res.data.map((p) => this.mapPazienteAnagraficaDTOToPazienteAnagrafica(p)),
+          );
+          this.#ricercaEseguita.set(true);
+          this.#ricercaInCorso.set(false);
+        },
+        error: (err) => {
+          console.error('Errore durante la ricerca del paziente:', err);
+          this.#risultatiRicerca.set([]);
+          this.#ricercaEseguita.set(true);
+          this.#ricercaInCorso.set(false);
+          this.#erroreRicerca.set(
+            err.error?.message ?? 'Errore durante la ricerca del paziente.',
+          );
+        },
+      });
+  }
+
+  public mapPazienteAnagraficaDTOToPazienteAnagrafica(
+    pz: PazienteAnagraficaDTO,
+  ): PazienteAnagrafica {
+    return {
+      id: pz.id,
+      codiceFiscale: pz.codice_fiscale,
+      nome: pz.nome,
+      cognome: pz.cognome,
+      dataNascita: pz.data_nascita,
+      sesso: pz.sex,
+      indirizzoVia: pz.indirizzo_via,
+      indirizzoCivico: pz.indirizzo_civico,
+      comune: pz.comune,
+      provincia: pz.provincia,
+    };
   }
 }

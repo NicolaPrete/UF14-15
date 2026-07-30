@@ -1,0 +1,163 @@
+<p-fieldset legend="Ricerca Paziente">
+  <div class="flex flex-col gap-4">
+    <p-selectbutton
+      (ngModelChange)="cambiaModalita($event)"
+      [ngModel]="modalita()"
+      [options]="modalitaOptions"
+      optionLabel="label"
+      optionValue="value"
+    />
+
+    @if (modalita() === 'cf') {
+      <form
+        (submit)="cercaPerCodiceFiscale()"
+        [formGroup]="ricercaCfForm"
+        class="flex flex-row flex-wrap items-end gap-4"
+      >
+        <div class="flex flex-col">
+          <label for="ricercaCf">Codice Fiscale:</label>
+          <input
+            [invalid]="checkFormControl(ricercaCfForm, 'codiceFiscale')"
+            class="w-2xs"
+            formControlName="codiceFiscale"
+            id="ricercaCf"
+            pInputText
+            type="text"
+          />
+          @if (checkFormControl(ricercaCfForm, 'codiceFiscale')) {
+            @if (checkFormControlError(ricercaCfForm, 'codiceFiscale', 'required')) {
+              <p-message severity="error" variant="simple">
+                Il campo 'Codice Fiscale' è obbligatorio.
+              </p-message>
+            }
+            @if (checkFormControlError(ricercaCfForm, 'codiceFiscale', 'pattern')) {
+              <p-message severity="error" variant="simple">
+                Il codice fiscale inserito non rispetta la struttura corretta.
+              </p-message>
+            }
+          }
+        </div>
+        <p-button [loading]="patientManager.ricercaInCorso()" icon="pi pi-search" label="Cerca" type="submit" />
+      </form>
+    } @else {
+      <form
+        (submit)="cercaPerAnagrafica()"
+        [formGroup]="ricercaAnagraficaForm"
+        class="flex flex-row flex-wrap items-end gap-4"
+      >
+        <div class="flex flex-col">
+          <label for="ricercaNome">Nome:</label>
+          <input
+            [invalid]="checkFormControl(ricercaAnagraficaForm, 'nome')"
+            class="w-2xs"
+            formControlName="nome"
+            id="ricercaNome"
+            pInputText
+            type="text"
+          />
+          @if (checkFormControl(ricercaAnagraficaForm, 'nome')) {
+            @if (checkFormControlError(ricercaAnagraficaForm, 'nome', 'required')) {
+              <p-message severity="error" variant="simple">
+                Il campo 'Nome' è obbligatorio.
+              </p-message>
+            }
+          }
+        </div>
+        <div class="flex flex-col">
+          <label for="ricercaCognome">Cognome:</label>
+          <input
+            [invalid]="checkFormControl(ricercaAnagraficaForm, 'cognome')"
+            class="w-2xs"
+            formControlName="cognome"
+            id="ricercaCognome"
+            pInputText
+            type="text"
+          />
+          @if (checkFormControl(ricercaAnagraficaForm, 'cognome')) {
+            @if (checkFormControlError(ricercaAnagraficaForm, 'cognome', 'required')) {
+              <p-message severity="error" variant="simple">
+                Il campo 'Cognome' è obbligatorio.
+              </p-message>
+            }
+          }
+        </div>
+        <div class="flex flex-col">
+          <label for="ricercaDataNascita">Data di nascita:</label>
+          <p-datePicker
+            [invalid]="checkFormControl(ricercaAnagraficaForm, 'dataNascita')"
+            [maxDate]="maxDate"
+            class="w-2xs"
+            dateFormat="dd/mm/yy"
+            formControlName="dataNascita"
+            id="ricercaDataNascita"
+            placeholder="dd/mm/yyyy"
+          />
+          @if (checkFormControl(ricercaAnagraficaForm, 'dataNascita')) {
+            @if (checkFormControlError(ricercaAnagraficaForm, 'dataNascita', 'required')) {
+              <p-message severity="error" variant="simple">
+                Il campo 'Data di nascita' è obbligatorio.
+              </p-message>
+            }
+          }
+        </div>
+        <p-button
+          [loading]="patientManager.ricercaInCorso()"
+          icon="pi pi-search"
+          label="Cerca"
+          type="submit"
+        />
+      </form>
+    }
+
+    <div class="flex flex-row justify-end">
+      <p-button
+        (onClick)="segnalaNuovoPaziente()"
+        icon="pi pi-user-plus"
+        label="Nuovo Paziente"
+        severity="secondary"
+        variant="outlined"
+      />
+    </div>
+
+    @if (patientManager.erroreRicerca()) {
+      <p-message severity="error" variant="simple">{{ patientManager.erroreRicerca() }}</p-message>
+    }
+
+    @if (patientManager.ricercaEseguita()) {
+      @if (patientManager.risultatiRicerca().length > 0) {
+        <p-table [value]="patientManager.risultatiRicerca()" dataKey="id">
+          <ng-template #header>
+            <tr>
+              <th>Nome</th>
+              <th>Cognome</th>
+              <th>Codice Fiscale</th>
+              <th>Data di nascita</th>
+              <th></th>
+            </tr>
+          </ng-template>
+          <ng-template #body let-pz>
+            <tr>
+              <td>{{ pz.nome }}</td>
+              <td>{{ pz.cognome }}</td>
+              <td>{{ pz.codiceFiscale }}</td>
+              <td>{{ pz.dataNascita | date: 'dd/MM/yyyy' }}</td>
+              <td>
+                <p-button
+                  (onClick)="selezionaPaziente(pz)"
+                  icon="pi pi-check"
+                  label="Seleziona"
+                  size="small"
+                />
+              </td>
+            </tr>
+          </ng-template>
+        </p-table>
+      } @else {
+        <p-message severity="warn" variant="simple">
+          Nessun paziente trovato con i criteri inseriti. Puoi procedere con "Nuovo Paziente" per
+          creare una nuova scheda anagrafica.
+        </p-message>
+      }
+    }
+  </div>
+</p-fieldset>

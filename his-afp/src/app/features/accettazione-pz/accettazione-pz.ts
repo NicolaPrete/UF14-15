@@ -1,89 +1,41 @@
-import { ChangeDetectionStrategy, Component, inject } from '@angular/core';
-import { GestioneRisorse } from '../../core/Risorse/gestione-risorse';
-import { InputText } from 'primeng/inputtext';
-import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
-import { Button } from 'primeng/button';
-import { Message } from 'primeng/message';
-import { DatePicker } from 'primeng/datepicker';
-import { SelectModule } from 'primeng/select';
-import { Textarea } from 'primeng/textarea';
-import { Fieldset } from 'primeng/fieldset';
-import { PatientManager } from '../../core/Pazienti/patient-manager';
-import { PatientAdmission } from '../../core/Pazienti/Pazienti.model';
+import { ChangeDetectionStrategy, Component, signal } from '@angular/core';
+import { RicercaPz } from './ricerca-pz/ricerca-pz';
+import { FormAccettazionePz } from './form-accettazione-pz/form-accettazione-pz';
+import { PazienteAnagrafica } from '../../core/Pazienti/Pazienti.model';
 
+/**
+ * Pagina di Accettazione Paziente.
+ *
+ * Orchestrazione del workflow "Ricerca e Accettazione Avanzata" (Task 2):
+ * - Il componente di ricerca (RicercaPz) permette di cercare un paziente già
+ *   presente in anagrafica per Codice Fiscale, oppure per Nome, Cognome e
+ *   Data di Nascita.
+ * - Se un paziente viene selezionato dai risultati, i suoi dati anagrafici
+ *   storici vengono passati (tramite signal + input) al componente form
+ *   (FormAccettazionePz), che li precompila con patchValue.
+ * - Se il paziente è nuovo (o non viene trovato), l'operatore può scegliere
+ *   "Nuovo Paziente" per compilare una scheda anagrafica da zero.
+ * - Il form viene mostrato solo dopo che una di queste due scelte è stata
+ *   effettuata.
+ */
 @Component({
   selector: 'his-accettazione-pz',
-  imports: [
-    InputText,
-    ReactiveFormsModule,
-    Button,
-    Message,
-    DatePicker,
-    SelectModule,
-    Textarea,
-    Fieldset,
-  ],
+  imports: [RicercaPz, FormAccettazionePz],
   templateUrl: './accettazione-pz.html',
   styleUrl: './accettazione-pz.scss',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class AccettazionePz {
-  gestioneRisorse = inject(GestioneRisorse);
-  patientManager = inject(PatientManager);
+  readonly pazienteTrovato = signal<PazienteAnagrafica | null>(null);
+  readonly mostraForm = signal(false);
 
-  readonly maxDate = new Date();
-  readonly sexOption = [
-    {
-      code: 'M',
-      desc: 'Maschio',
-    },
-    {
-      code: 'F',
-      desc: 'Femmina',
-    },
-  ];
-
-  readonly #fb = inject(FormBuilder);
-  paziente = this.#fb.group({
-    anagrafica: this.#fb.group({
-      nome: ['', [Validators.required]],
-      cognome: ['', [Validators.required]],
-      dataNascita: ['', [Validators.required]],
-      codiceFiscale: [
-        '',
-        [Validators.required, Validators.pattern('[A-Z]{6}\\d{2}[A-Z]\\d{2}[A-Z]\\d{3}[A-Z]')],
-        // {pattern: {requiredPattern: '^[a-zA-Z ]*$', actualValue: '1'}}
-      ],
-      sesso: ['', [Validators.required]],
-    }),
-    sanitaria: this.#fb.group({
-      patologia: ['', [Validators.required]],
-      codiceColore: ['', [Validators.required]],
-      modArrivo: ['', [Validators.required]],
-      noteTriage: ['', [Validators.required, Validators.maxLength(500)]],
-    }),
-  });
-
-  checkFormControl(control: string) {
-    const fc = this.paziente.get(control);
-    // nome.invalid && (nome.touched || nome.dirty)
-    return fc?.invalid && (fc.touched || fc.dirty);
+  public onPazienteSelezionato(pz: PazienteAnagrafica) {
+    this.pazienteTrovato.set(pz);
+    this.mostraForm.set(true);
   }
-  checkFormControlError(control: string, err: string) {
-    const fc = this.paziente.get(control);
 
-    if (fc && fc.hasError(err)) {
-      return fc.getError(err);
-    } else {
-      return null;
-    }
-  }
-  onSubmit() {
-    if (this.paziente.valid) {
-      console.log(this.paziente.value);
-      this.patientManager.admitPatient(this.paziente.value as PatientAdmission);
-    } else {
-      this.paziente.markAllAsTouched();
-    }
+  public onNuovoPaziente() {
+    this.pazienteTrovato.set(null);
+    this.mostraForm.set(true);
   }
 }
